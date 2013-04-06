@@ -7,7 +7,7 @@ from theano.tensor.shared_randomstreams import RandomStreams
 
 class CRBM(object):
     """ Convolutional Restricted Boltzman Machine"""
-    def __init__(self, input=None, filter_shape, image_shape, poolsize, \
+    def __init__(self, input=None, FS, IS, poolsize, \
                      W=None, hbias=None, vbias=None, numpy_rng=None,
                      theano_rng=None):
 
@@ -118,7 +118,8 @@ class CRBM(object):
         # reshape hbias to shape (1, # filters, 1, 1) which will be broadcasted over other dims        
         wx_b = conv_out + self.hbias.dimshuffle('x', 0, 'x', 'x')
         
-        hidden_term = T.sum(T.log(1+T.exp(wx_b))) # Question me if think this makes no sense--Minghao
+#        hidden_term = T.sum(T.log(1+T.exp(wx_b))) # Question me if think this makes no sense--Minghao
+        hidden_term = T.sum(T.nnet.softplut(wx_b))
 
         # reshape vbias to shape (1, # input channels, 1, 1) which will be broadcasted over other dims
         vbias_term = T.sum(v_sample * self.vbias.dimshuffle('x', 0, 'x', 'x'))
@@ -314,5 +315,87 @@ class CRBM(object):
 
         return cross_entropy
 
+def test_rbm(lr=0.01, train_epochs = 15,
+             dataset='../data/mnist.pkl.gz',
+             batch_size = 20,
+             n_chains = 20, n_samples=10):
 
+    # Prepare the data set
+    datasets = load_data(dataset)
 
+    train_set_x, train_set_y = datasets[0]
+    valid_set_x, valid_set_y = datasets[1]
+    test_set_x,  test_set_y  = datasets[2]
+
+    # compute number of minibatches for training, validation and testing
+    n_train_batches = train_set_x.get_value(borrow=True).shape[0]
+    n_valid_batches = valid_set_x.get_value(borrow=True).shape[0]
+    n_test_batches = test_set_x.get_value(borrow=True).shape[0]
+    n_train_batches /= batch_size
+    n_valid_batches /= batch_size
+    n_test_batches /= batch_size
+
+    # allocate symbolic variables for the data
+    index = T.lscalar()  # index to a [mini]batch
+    x = T.matrix('x')   # the data is presented as rasterized images
+    y = T.ivector('y')  # the labels are presented as 1D vector of [int] labels
+
+    # also initialize the random stream generator
+    rng = numpy.random.RandomState(123)
+    theano_rng = RandomStreams(rng.randint(2 ** 30))
+
+# For now don't use PCD
+    # initialize storage for the persistent chain (state = hidden layer or chain)
+   # persistent_chain = theano.shared(numpy.zeros((batch_size, 
+
+    # construct the CRBM class
+    # for this test, the parameters are not shared with another CNN
+    crbm = CRBM(input=x, 
+                IS=(batch_size, 1, 28, 28),
+                FS=(nkerns[0], 1, 5, 5),
+                numpy_rng = rng, theano_rng = theano_rng)
+
+    
+    # get the cost and the gradient corresponding to on step of CD-15
+    cost, updates = crbm.get_cost_updates(lr= lr, k=15)
+
+    ##########################
+    # Training starts
+    ##########################
+    # TODO: set up output image folder
+
+    train_crbm = theano.function([index], cost, updates=updates,
+                                 givens={x: train_set_x[index*batch_size: (index+1)*batch_size]},
+                                 name = 'train_crbm')
+
+    start_time = time.clock()
+
+    # go through training epochs
+    for epoch in xrange(training_epochs):
+
+        # go through the training set
+        mean_cost = []
+        for batch_index in xrange(n_training_batches):
+            mean_cost += [train_crbm(batch_index)]
+
+        print 'Training epoch %d, cost is ', % epoch, numpy.mean(mean_cost)
+
+        # TODO: plot filters after each training epoch
+        
+
+    end_time = time.clock()
+
+    pretrain_time = (end_time - start_time)
+
+    print ('Training took %f minuts' % (pretrain_time /60.))
+
+    #########################
+    # Sampling from the RBM #
+    #########################
+    # find out the number of test samples
+    num_test_samples = test_set_x.get_value(borrow=True).shape[0]
+
+    # TODO: pick random sample to initialize the persistent chain
+
+if __name__ == "__main__":
+    test_crbm()
