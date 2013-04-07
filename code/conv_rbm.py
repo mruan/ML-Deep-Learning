@@ -3,6 +3,7 @@
 import theano
 import theano.tensor as T
 
+from theano.tensor.nnet import conv     # for conv2d
 from theano.tensor.shared_randomstreams import RandomStreams
 
 class CRBM(object):
@@ -16,17 +17,17 @@ class CRBM(object):
 
         :param input: None for standalone RBMs or symbolic variable if RBM is part of a larger graph
 
-        :type filter_shape: tuple or list of length 4
+        :type FS-"filter_shape": tuple or list of length 4
         :param filter_shape: [# of filters, # input feature maps, filter height, filter width];
 
-        :type image_shape: tuple or list of length 4
+        :type IS-"image_shape": tuple or list of length 4
         :param image_shape: [batch_size, # input feature maps, image height, image width];
 
         :type poolsize: tuple or list of length 2
         :param poolsize: down sample factor
 
         :type W: theano tensor
-        :param W: None for standalone CRBM, otherwise it is a symbolic variable pointing to a
+        :param W: None for stand-alone CRBM, otherwise it is a symbolic variable pointing to a
                   shared Weight matrix in a Conv-Pool layer in CNN
 
         :type hbias: theano tensor
@@ -38,7 +39,7 @@ class CRBM(object):
                       visible units bias.
         """
 
-        assert image_shape[1] == filter_shape[1]
+        assert IS[1] == FS[1] #input feature maps must match
         
         self.input = input
         if not input:
@@ -51,20 +52,20 @@ class CRBM(object):
             # each unit in the lower layer receives a gradient from:
             # "# output feature maps * filter height * filter width"
             W_bound= numpy.sqrt(6. / fan_in + fan_out)
-            init_w = numpy.asarray(numpy_rng.uniform(low=-W_bound, high=W_bound, size=filter_shape),
+            init_w = numpy.asarray(numpy_rng.uniform(low=-W_bound, high=W_bound, size=FS),
                                    dtype = theano.config.floatX)
 
             W = theano.shared(value=initial_W, name='W', borrow=True)
 
         if hbias is None:
             # create shared variable for hidden units bias
-            hbias = theano.shared(value=numpy.zeros((filter_shape[0],), 
+            hbias = theano.shared(value=numpy.zeros((FS[0],), 
                                                     dtype=theano.config.floatX), 
                                   name='hbias', borrow= True)
 
         if vbias is None:
             # create shared variable for visible units bias
-            vbias = theano.shared(value=numpy.zeros((filter_shape[1],),
+            vbias = theano.shared(value=numpy.zeros((FS[1],),
                                                     dtype=theano.config.floatX),
                                   name='vbias', borrow= True)
 
@@ -76,53 +77,53 @@ class CRBM(object):
         self.IS = IS
 
         ## some parameters for sampling h->v
-        # Output now becomes input, input channels are outputs
+        # Output now becomes input, input channels are outputs;
+        # The filer size remains the same
         self.FSinv = (FS[1], FS[0], FS[2], FS[3])
 
         # Same batch size, # input=# output filter maps, 
         # image size = ImageHight-FilterHeight+1, ImageWidth-FilterWidth+1
+        # TODO: THIS IS IMPORTANT, DOUBLE CHECK!! 
         self.ISinv = (IS[0], FS[0], IS[2]-FS[2]+1, IS[3]-FS[3]+1)
 
-        self.theano_rng = theano_rng # why do I need it here?--Minghao
-
-### TODO: Figure out a way to put this
-        conv_v2h = conv.conv2d(input=input, filters=self.W, 
-                               filter_shape=filter_shape, image_shape=image_shape)
-
-#        conv_h2v = conv.conv2d(
-
-### end of TODO
+        self.theano_rng = theano_rng
 
         self.params = [self.W, self.hbias, self.vhias]
 
     # Convolve input visible samples up the the hidden units
     def conv_upward(self, v_sample):
+        # The conv output is of shape [batch_size, # out channels, out_height, out_width]
+        # where out_h|w = in_h|w - filter_h|w + 1
         pre_sigm_h = conv.conv2d(v_sample, filters=self.W, 
-                                 filter_shape=self.FS, 
-                                 image_shape=self.IS) + self.hbias.dimshuffle('x', 0, 'x', 'x')
+                                 filter_shape=self.FS, image_shape=self.IS) \
+                     + self.hbias.dimshuffle('x', 0, 'x', 'x') # apply each bias to every map
+                     
         return pre_sigm_h
 
     # Convolve output hidden down to the visible units (although it's technically not convolution)
     def conv_downward(self, h_sample):
+        # self.W is of shape [#in_channels, #out channels, Kernel_H, Kernel_W]
+        # when convolve downward, the first two dimensions must be swapped
         Wp = self.W.dimshuffle(1,0,2,3) # change input<->output
-        # each filter has to be fliped horizontally and vertically
-        pre_sigm_v = conv.conv2d(h_sample, filters=W[:,:,::-1,::-1],
-                                 filter_shape= self.FSinv,
-                                 image_shape = self.ISinv) + self.vbias.dimshuffle('x',0,'x','x')
+        # and then each filter has to be flipped horizontally and vertically
+        pre_sigm_v = conv.conv2d(h_sample, filters = Wp[:,:,::-1,::-1],
+                                 filter_shape= self.FSinv, image_shape = self.ISinv,
+                                 border_mode='full') + self.vbias.dimshuffle('x',0,'x','x')
 
     def free_energy(self, v_sample):
-        ''' Compute the free energy '''
-        conv_out = conv.conv2d(v_sample, filters=self.W,
-                               filter_shape=self.FS, image_shape= self.IS)
-
-        # reshape hbias to shape (1, # filters, 1, 1) which will be broadcasted over other dims        
-        wx_b = conv_out + self.hbias.dimshuffle('x', 0, 'x', 'x')
+        ''' Compute the free energy
+        v_sample will be of dimension [batch_size, #in channels, in_H, in_W]
+        '''
+        # wx_b.shape = [batch_size, #out maps, out_H, out_W]
+        wx_b = conv_upward(v_sample)
         
-#        hidden_term = T.sum(T.log(1+T.exp(wx_b))) # Question me if think this makes no sense--Minghao
-        hidden_term = T.sum(T.nnet.softplut(wx_b))
+#        hidden_term = T.sum(T.log(1+T.exp(wx_b)))
+        # hidden_term's shape is [batch_size], all other dimensions are absorbed by sum
+        hidden_term = T.sum(T.nnet.softplut(wx_b), axis=(1,2,3))
 
-        # reshape vbias to shape (1, # input channels, 1, 1) which will be broadcasted over other dims
-        vbias_term = T.sum(v_sample * self.vbias.dimshuffle('x', 0, 'x', 'x'))
+        # T.sum(v_sample, axis=(2,3)) reduces v_sample to shape [batch_size, # in channels],
+        # self.vbias has shape [#in channels]. So T.dot() reduces the whole thing to [batch_size]
+        vbias_term = T.dot(T.sum(v_sample, axis=(2,3)), self.vbias)
 
         return -hidden_term - vbias_term
 
@@ -135,10 +136,10 @@ class CRBM(object):
 
     def sample_h_given_v(self, v0_sample):
         ''' This function infers state of hidden units given visible units '''
-        # cimpute the activation of the hidden units given a sample of the visible
+        # compute the activation of the hidden units given a sample of the visible
         pre_sigm_h1, h1_mean = self.propup(v0_sample)
         # batch Gibbs Sampling
-        h1_sample = self.theano_rng.binomial(size=hi_mean.shape, n=1, p=h1_mean,
+        h1_sample = self.theano_rng.binomial(size=h1_mean.shape, n=1, p=h1_mean,
                                              dtype = theano.config.floatX)
         return [pre_sigmoid_h1, h1_mean, h1_sample]
 
@@ -160,22 +161,21 @@ class CRBM(object):
                                              dtype=theano.config.floatX)
         return [pre_sigm_v1, v1_mean, v1_sample]
 
-    ## TODO: add energy function and sampling method for Gaussian
     def gibbs_hvh(self, h0_sample):
         ''' This function implements one step of Gibbs sampling,
-            starting from the visible state'''
-        pre_sigm_v1, v1_mean, v1_sample = self.sample_v_given_h(h0_sample)
-        pre_sigm_h1, h1_mean, h1_sample = self.sample_h_given_v(v1_sample)
-        return [pre_sigm_v1, v1_mean, v1_sample, 
-                pre_sigm_h1, h1_mean, h1_sample]
+            starting from the hidden state'''
+        pre_sigmoid_v1, v1_mean, v1_sample = self.sample_v_given_h(h0_sample)
+        pre_sigmoid_h1, h1_mean, h1_sample = self.sample_h_given_v(v1_sample)
+        return [pre_sigmoid_v1, v1_mean, v1_sample,
+                pre_sigmoid_h1, h1_mean, h1_sample]
 
     def gibbs_vhv(self, v0_sample):
-         ''' This function implements one step of Gibbs sampling,
+        ''' This function implements one step of Gibbs sampling,
             starting from the visible state'''
-        pre_sigm_h1, h1_mean, h1_sample = self.sample_h_given_v(v0_sample)
-        pre_sigm_v1, v1_mean, v1_sample = self.sample_v_given_h(h1_sample)
-        return [pre_sigm_h1, h1_mean, h1_sample, 
-                pre_sigm_v1, v1_mean, v1_sample]
+        pre_sigmoid_h1, h1_mean, h1_sample = self.sample_h_given_v(v0_sample)
+        pre_sigmoid_v1, v1_mean, v1_sample = self.sample_v_given_h(h1_sample)
+        return [pre_sigmoid_h1, h1_mean, h1_sample,
+                pre_sigmoid_v1, v1_mean, v1_sample]
 
     
 # the rest not so sure...
@@ -227,16 +227,15 @@ class CRBM(object):
         # not that we only need the sample at the end of the chain
         chain_end = nv_samples[-1]
 
-        cost = T.mean(self.free_energy(self.input)) - T.mean(
-            self.free_energy(chain_end))
+        cost = T.mean(self.free_energy(self.input)) \
+              -T.mean(self.free_energy(chain_end))
         # We must not compute the gradient through the gibbs sampling
         gparams = T.grad(cost, self.params, consider_constant=[chain_end])
 
         # constructs the update dictionary
         for gparam, param in zip(gparams, self.params):
             # make sure that the learning rate is of the right dtype
-            updates[param] = param - gparam * T.cast(lr,
-                                                    dtype=theano.config.floatX)
+            updates[param] = param-gparam*T.cast(lr, dtype=theano.config.floatX)
         if persistent:
             # Note that this works only if persistent is a shared variable
             updates[persistent] = nh_samples[-1]
@@ -308,12 +307,13 @@ class CRBM(object):
 
         """
 
-        cross_entropy = T.mean(
-                T.sum(self.input * T.log(T.nnet.sigmoid(pre_sigmoid_nv)) +
-                (1 - self.input) * T.log(1 - T.nnet.sigmoid(pre_sigmoid_nv)),
-                      axis=1))
+        # ce = 'cross entropy' for each image in mini batch
+        # mean is over the [batch_size] dimension whereas sum is over all other dimensions
+        ce = T.mean(T.sum(    self.input * T.log(T.nnet.sigmoid(pre_sigmoid_nv))  \
+                          +(1-self.input)* T.log(1-T.nnet.sigmoid(pre_sigmoid_nv)), 
+                          axis=(1,2,3) ) )
 
-        return cross_entropy
+        return ce
 
 def test_rbm(lr=0.01, train_epochs = 15,
              dataset='../data/mnist.pkl.gz',
