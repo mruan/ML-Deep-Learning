@@ -1,10 +1,14 @@
 """ Convolutional Restricted Boltzman Machine """
 
+import numpy
 import theano
-import theano.tensor as T
+import theano.tensor as TT
 
 from theano.tensor.nnet import conv     # for conv2d
 from theano.tensor.shared_randomstreams import RandomStreams
+
+from utils import tile_raster_images
+from utils import load_data
 
 class CRBM(object):
     """ Convolutional Restricted Boltzman Machine"""
@@ -43,7 +47,7 @@ class CRBM(object):
         
         self.input = input
         if not input:
-            self.input = T.matrix('input')
+            self.input = TT.matrix('input')
 
         if W is None:
             # there are "# input feature maps * filter height * filter width"
@@ -117,13 +121,13 @@ class CRBM(object):
         # wx_b.shape = [batch_size, #out maps, out_H, out_W]
         wx_b = conv_upward(v_sample)
         
-#        hidden_term = T.sum(T.log(1+T.exp(wx_b)))
+#        hidden_term = TT.sum(TT.log(1+TT.exp(wx_b)))
         # hidden_term's shape is [batch_size], all other dimensions are absorbed by sum
-        hidden_term = T.sum(T.nnet.softplut(wx_b), axis=(1,2,3))
+        hidden_term = TT.sum(TT.nnet.softplut(wx_b), axis=(1,2,3))
 
         # T.sum(v_sample, axis=(2,3)) reduces v_sample to shape [batch_size, # in channels],
         # self.vbias has shape [#in channels]. So T.dot() reduces the whole thing to [batch_size]
-        vbias_term = T.dot(T.sum(v_sample, axis=(2,3)), self.vbias)
+        vbias_term = TT.dot(TT.sum(v_sample, axis=(2,3)), self.vbias)
 
         return -hidden_term - vbias_term
 
@@ -132,7 +136,7 @@ class CRBM(object):
         The pre-sigmoid activation of the layer is also computed
         '''
         pre_sigm_h = conv_upward(vis)
-        return [pre_sigm_h, T.nnet.sigmoid(pre_sigm_h)]
+        return [pre_sigm_h, TT.nnet.sigmoid(pre_sigm_h)]
 
     def sample_h_given_v(self, v0_sample):
         ''' This function infers state of hidden units given visible units '''
@@ -147,7 +151,7 @@ class CRBM(object):
         ''' This function propagates the hidden units downwards to visible units
         '''
         pre_sigm_v = conv_downward(hid)
-        return [pre_sigm_v, T.nnet.sigmoid(pre_sigm_v)]
+        return [pre_sigm_v, TT.nnet.sigmoid(pre_sigm_v)]
 
     def sample_v_given_h(self, h0_sample):
         ''' This function infers state of visible units given hidden units '''
@@ -227,15 +231,15 @@ class CRBM(object):
         # not that we only need the sample at the end of the chain
         chain_end = nv_samples[-1]
 
-        cost = T.mean(self.free_energy(self.input)) \
-              -T.mean(self.free_energy(chain_end))
+        cost = TT.mean(self.free_energy(self.input)) \
+              -TT.mean(self.free_energy(chain_end))
         # We must not compute the gradient through the gibbs sampling
-        gparams = T.grad(cost, self.params, consider_constant=[chain_end])
+        gparams = TT.grad(cost, self.params, consider_constant=[chain_end])
 
         # constructs the update dictionary
         for gparam, param in zip(gparams, self.params):
             # make sure that the learning rate is of the right dtype
-            updates[param] = param-gparam*T.cast(lr, dtype=theano.config.floatX)
+            updates[param] = param-gparam*TT.cast(lr, dtype=theano.config.floatX)
         if persistent:
             # Note that this works only if persistent is a shared variable
             updates[persistent] = nh_samples[-1]
@@ -255,7 +259,7 @@ class CRBM(object):
         bit_i_idx = theano.shared(value=0, name='bit_i_idx')
 
         # binarize the input image by rounding to nearest integer
-        xi = T.round(self.input)
+        xi = TT.round(self.input)
 
         # calculate free energy for the given bit configuration
         fe_xi = self.free_energy(xi)
@@ -263,13 +267,13 @@ class CRBM(object):
         # flip bit x_i of matrix xi and preserve all other bits x_{\i}
         # Equivalent to xi[:,bit_i_idx] = 1-xi[:, bit_i_idx], but assigns
         # the result to xi_flip, instead of working in place on xi.
-        xi_flip = T.set_subtensor(xi[:, bit_i_idx], 1 - xi[:, bit_i_idx])
+        xi_flip = TT.set_subtensor(xi[:, bit_i_idx], 1 - xi[:, bit_i_idx])
 
         # calculate free energy with bit flipped
         fe_xi_flip = self.free_energy(xi_flip)
 
         # equivalent to e^(-FE(x_i)) / (e^(-FE(x_i)) + e^(-FE(x_{\i})))
-        cost = T.mean(self.n_visible * T.log(T.nnet.sigmoid(fe_xi_flip -
+        cost = TT.mean(self.n_visible * TT.log(TT.nnet.sigmoid(fe_xi_flip -
                                                             fe_xi)))
 
         # increment bit_i_idx % number as part of updates
@@ -309,15 +313,16 @@ class CRBM(object):
 
         # ce = 'cross entropy' for each image in mini batch
         # mean is over the [batch_size] dimension whereas sum is over all other dimensions
-        ce = T.mean(T.sum(    self.input * T.log(T.nnet.sigmoid(pre_sigmoid_nv))  \
-                          +(1-self.input)* T.log(1-T.nnet.sigmoid(pre_sigmoid_nv)), 
+        ce = TT.mean(TT.sum(    self.input * TT.log(TT.nnet.sigmoid(pre_sigmoid_nv))  \
+                          +(1-self.input)* TT.log(1-TT.nnet.sigmoid(pre_sigmoid_nv)), 
                           axis=(1,2,3) ) )
 
         return ce
 
+# The following code is meant for testing on MNIST data set
 def test_rbm(lr=0.01, train_epochs = 15,
              dataset='../data/mnist.pkl.gz',
-             batch_size = 20,
+             batch_size = 100, n_kerns=20,
              n_chains = 20, n_samples=10):
 
     # Prepare the data set
@@ -327,7 +332,7 @@ def test_rbm(lr=0.01, train_epochs = 15,
     valid_set_x, valid_set_y = datasets[1]
     test_set_x,  test_set_y  = datasets[2]
 
-    # compute number of minibatches for training, validation and testing
+    # compute number of mini-batches for training, validation and testing
     n_train_batches = train_set_x.get_value(borrow=True).shape[0]
     n_valid_batches = valid_set_x.get_value(borrow=True).shape[0]
     n_test_batches = test_set_x.get_value(borrow=True).shape[0]
@@ -336,26 +341,29 @@ def test_rbm(lr=0.01, train_epochs = 15,
     n_test_batches /= batch_size
 
     # allocate symbolic variables for the data
-    index = T.lscalar()  # index to a [mini]batch
-    x = T.matrix('x')   # the data is presented as rasterized images
-    y = T.ivector('y')  # the labels are presented as 1D vector of [int] labels
+    index = TT.lscalar()  # index to a [mini]batch
+    x = TT.matrix('x')    # the data is presented as rasterized images
+    y = TT.ivector('y')   # the labels are presented as 1D vector of [int] labels
 
+    # Reshape the rasterized image of shape (batch_size, 28x28)
+    # to a 4D tensor, compatible with our crbm
+    rbm_input = x.reshape((batch_size, 1, 28, 28))
+    
     # also initialize the random stream generator
     rng = numpy.random.RandomState(123)
     theano_rng = RandomStreams(rng.randint(2 ** 30))
 
 # For now don't use PCD
     # initialize storage for the persistent chain (state = hidden layer or chain)
-   # persistent_chain = theano.shared(numpy.zeros((batch_size, 
+    # persistent_chain = theano.shared(numpy.zeros((batch_size, 
 
     # construct the CRBM class
     # for this test, the parameters are not shared with another CNN
-    crbm = CRBM(input=x, 
+    crbm = CRBM(input=rbm_input, 
                 IS=(batch_size, 1, 28, 28),
-                FS=(nkerns[0], 1, 5, 5),
+                FS=(n_kerns, 1, 5, 5),
                 numpy_rng = rng, theano_rng = theano_rng)
 
-    
     # get the cost and the gradient corresponding to on step of CD-15
     cost, updates = crbm.get_cost_updates(lr= lr, k=15)
 
@@ -378,7 +386,7 @@ def test_rbm(lr=0.01, train_epochs = 15,
         for batch_index in xrange(n_training_batches):
             mean_cost += [train_crbm(batch_index)]
 
-        print 'Training epoch %d, cost is ', % epoch, numpy.mean(mean_cost)
+        print "Training epoch %d, cost is " % epoch, numpy.mean(mean_cost)
 
         # TODO: plot filters after each training epoch
         
@@ -387,15 +395,50 @@ def test_rbm(lr=0.01, train_epochs = 15,
 
     pretrain_time = (end_time - start_time)
 
-    print ('Training took %f minuts' % (pretrain_time /60.))
-
+    print "Training took %f minutes" % (pretrain_time /60.)
+    
+    # visualize the filters:
+    fflaten = theano.function([], TT.reshape(crbm.W, (FS[0]*FS[1], FS[2]*FS[3])), name='fflaten')
+    image_data = tile_raster_images(X=fflaten(), img_shape=(FS[2],FS[3]),
+                                    tile_shape = (FS[0],FS[1]), tile_spacing=(1,1))
+    
+    image = PIL.Image.fromarray(image_data)
+    image.save('filter.png')
+    
+'''
     #########################
     # Sampling from the RBM #
     #########################
     # find out the number of test samples
     num_test_samples = test_set_x.get_value(borrow=True).shape[0]
 
-    # TODO: pick random sample to initialize the persistent chain
+    # pick random sample to initialize the persistent chain
+    test_idx = rng.randint(num_test_samples - n_chains)
+    pvis_train = theano.shared(numpy.asarray(
+                        test_set_x.get_value(borrow=True)[test_idx:test_idx+n_chains], 
+                        dtype = theano.config.floatX))
+    
+    plot_every = 1000
+    # define one step of Gibbs sampling (mf = mean-field) define a 
+    # function that does 'plot_every' steps before returning the 
+    # sample for plotting
+    [presig_hs, h_mfs, h_samples, presig_vs, v_mfs, v_samples], updates \
+        = theano.scan(crbm.gibbs_vhv,
+                      outputs_info=[None, None, None, None, None, pvis_train],
+                      n_steps = plot_every)
+        
+    # add to updates the shared variable that takes care of our persistent chain:
+    updates.update({pvis_train: v_samples[-1]})
+    
+    # construct the function that implements our persistent chain.
+    # we generate the "mean field" activations for plotting and the actual
+    # samples for reinitializing the state of our persistent chain
+    sample_fn = theano.function([], [v_mfs[-1], v_samples[-1]],
+                                updates = updates, name = 'sample_fn')
 
+    # create a space to store the image for plotting
+    # (we need to leave room for the tile_spacing as well)
+    # TODO: finish the sampling code!!!
+'''    
 if __name__ == "__main__":
     test_crbm()
