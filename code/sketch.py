@@ -1,5 +1,5 @@
 
-
+import time
 import numpy
 import theano
 import theano.tensor as TT
@@ -11,9 +11,9 @@ from utils import tile_raster_images
 from utils import load_data
 
 learn_rate=0.01
-train_epochs = 15,
+train_epochs = 15
 dataset='../data/mnist.pkl.gz'
-batch_size = 100
+batch_size = 50
 n_kerns=20
 n_chains = 20
 n_samples=10
@@ -54,13 +54,13 @@ crbm = CRBM(input=rbm_input,
             numpy_rng = rng, theano_rng = theano_rng)
 
 # initialize storage for the persistent chain (state = hidden layer or chain)
-persistent_chain = theano.shared(numpy.zeros(crbm.ISinv,
-                                             dtype=theano.config.floatX),
-                                 borrow = True)
+#persistent_chain = theano.shared(numpy.zeros(crbm.ISinv,
+#                                             dtype=theano.config.floatX),
+#                                 borrow = True)
                                              
 # get the cost and the gradient corresponding to on step of CD-15
-cost, updates = crbm.get_cost_updates(lr= learn_rate, k=15,
-                                      persistent = persistent_chain)
+print 'Build computing graph'
+cost, updates = crbm.get_cost_updates(lr= learn_rate, k=15)
 
 ##########################
 # Training starts
@@ -72,13 +72,14 @@ train_crbm = theano.function([index], cost, updates=updates,
                              name = 'train_crbm')
 
 start_time = time.clock()
-
+print 'Training Starts...'
 # go through training epochs
-for epoch in xrange(training_epochs):
+for epoch in xrange(train_epochs):
 
     # go through the training set
     mean_cost = []
-    for batch_index in xrange(n_training_batches):
+    for batch_index in xrange(n_train_batches):
+        print 'On batch %d of %d' % (batch_index, n_train_batches)
         mean_cost += [train_crbm(batch_index)]
 
     print "Training epoch %d, cost is " % epoch, numpy.mean(mean_cost)

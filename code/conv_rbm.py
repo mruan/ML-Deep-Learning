@@ -105,11 +105,13 @@ class CRBM(object):
     def conv_downward(self, h_sample):
         # self.W is of shape [#in_channels, #out channels, Kernel_H, Kernel_W]
         # when convolve downward, the first two dimensions must be swapped
-        Wp = self.W.dimshuffle(1,0,2,3) # change input<->output
+#        Wp =  # change input<->output
         # and then each filter has to be flipped horizontally and vertically
-        pre_sigm_v = conv.conv2d(h_sample, filters = Wp[:,:,::-1,::-1],
+        pre_sigm_v = conv.conv2d(h_sample, filters = self.W.dimshuffle(1,0,2,3)[:,:,::-1,::-1],
                                  filter_shape= self.FSinv, image_shape = self.ISinv,
                                  border_mode='full') + self.vbias.dimshuffle('x',0,'x','x')
+        return pre_sigm_v
+                            
 
     def free_energy(self, v_sample):
         ''' Compute the free energy
@@ -181,7 +183,7 @@ class CRBM(object):
 
     
 # the rest not so sure...
-    def get_cost_updates(self, lr=0.1, persistent=None, k=1):
+    def get_cost_updates(self, lr=0.1, k=1, persistent=None):
         """This functions implements one step of CD-k or PCD-k
 
         :param lr: learning rate used to train the RBM
@@ -271,8 +273,7 @@ class CRBM(object):
         fe_xi_flip = self.free_energy(xi_flip)
 
         # equivalent to e^(-FE(x_i)) / (e^(-FE(x_i)) + e^(-FE(x_{\i})))
-        cost = TT.mean(self.n_visible * TT.log(TT.nnet.sigmoid(fe_xi_flip -
-                                                            fe_xi)))
+        cost = TT.mean(self.n_visible * TT.log(TT.nnet.sigmoid(fe_xi_flip-fe_xi)))
 
         # increment bit_i_idx % number as part of updates
         updates[bit_i_idx] = (bit_i_idx + 1) % self.n_visible
@@ -311,7 +312,7 @@ class CRBM(object):
 
         # ce = 'cross entropy' for each image in mini batch
         # mean is over the [batch_size] dimension whereas sum is over all other dimensions
-        ce = TT.mean(TT.sum(    self.input * TT.log(TT.nnet.sigmoid(pre_sigmoid_nv))  \
+        ce = TT.mean(TT.sum(  self.input * TT.log(  TT.nnet.sigmoid(pre_sigmoid_nv))  \
                           +(1-self.input)* TT.log(1-TT.nnet.sigmoid(pre_sigmoid_nv)), 
                           axis=(1,2,3) ) )
 
