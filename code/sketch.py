@@ -1,4 +1,4 @@
-
+import PIL.Image
 import time
 import numpy
 import theano
@@ -11,11 +11,11 @@ from utils import tile_raster_images
 from utils import load_data
 
 learn_rate=0.01
-train_epochs = 15
+train_epochs = 2
 dataset='../data/mnist.pkl.gz'
-batch_size = 50
+batch_size = 100
 n_kerns=20
-n_chains = 20
+n_chains = 2
 n_samples=10
              
 # Prepare the data set
@@ -48,6 +48,8 @@ theano_rng = RandomStreams(rng.randint(2 ** 30))
 
 # construct the CRBM class
 # for this test, the parameters are not shared with another CNN
+FS=(n_kerns, 1, 5, 5)
+IS=IS=(batch_size, 1, 28, 28)
 crbm = CRBM(input=rbm_input, 
             IS=(batch_size, 1, 28, 28),
             FS=(n_kerns, 1, 5, 5),
@@ -71,6 +73,14 @@ train_crbm = theano.function([index], cost, updates=updates,
                              givens={x: train_set_x[index*batch_size: (index+1)*batch_size]},
                              name = 'train_crbm')
 
+print 'Filter before training'
+#fflaten = theano.function([], TT.reshape(crbm.W, (FS[0]*FS[1], FS[2]*FS[3])), name='fflaten')
+image_data = tile_raster_images(crbm.W.get_value(), img_shape=(FS[2],FS[3]),
+                                tile_shape = (4, 5), tile_spacing=(1,1))
+
+image = PIL.Image.fromarray(image_data)
+image.save('prefilter.png')
+
 start_time = time.clock()
 print 'Training Starts...'
 # go through training epochs
@@ -91,12 +101,12 @@ pretrain_time = (end_time - start_time)
 print "Training took %f minutes" % (pretrain_time /60.)
 
 # visualize the filters:
-fflaten = theano.function([], TT.reshape(crbm.W, (FS[0]*FS[1], FS[2]*FS[3])), name='fflaten')
-image_data = tile_raster_images(X=fflaten(), img_shape=(FS[2],FS[3]),
-                                tile_shape = (FS[0],FS[1]), tile_spacing=(1,1))
+#fflaten = theano.function([], TT.reshape(crbm.W, (FS[0]*FS[1], FS[2]*FS[3])), name='fflaten')
+#image_data = tile_raster_images(X, img_shape=(FS[2],FS[3]),
+#                                tile_shape = (FS[0],FS[1]), tile_spacing=(1,1))
 
-image = PIL.Image.fromarray(image_data)
-image.save('filter.png')
+#image = PIL.Image.fromarray(image_data)
+#image.save('filter.png')
 
 '''
 #########################
